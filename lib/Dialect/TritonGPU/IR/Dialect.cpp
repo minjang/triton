@@ -982,8 +982,8 @@ SmallVector<unsigned> DotOperandEncodingAttr::getShapePerCTATile(
   auto parentLayout = getParent();
   assert(parentLayout && "DotOperandEncodingAttr must have a parent");
   if (auto parentMmaLayout = parentLayout.dyn_cast<MmaEncodingTrait>()) {
-    return parentMmaLayout.getShapePerCTATileForDotOperands(tensorShape,
-                                                            getOpIdx());
+    return parentMmaLayout.getShapePerCTATileForDotOperands(
+        tensorShape, getKWidth(), getOpIdx());
   } else {
     llvm::report_fatal_error(
         "DotOperandEncodingAttr non-NvidiaMmaEncodingAttr parent not "
@@ -1551,22 +1551,23 @@ AMDMfmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
   }
 }
 
-SmallVector<unsigned>
-AMDMfmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
-                                                      int opIdx) const {
-  assert(getMDim() == 32);
+SmallVector<unsigned> AMDMfmaEncodingAttr::getShapePerCTATileForDotOperands(
+    ArrayRef<int64_t> shape, int kWidth, int opIdx) const {
   auto parentShapePerCTATile = getShapePerCTATile(shape);
   auto rank = parentShapePerCTATile.size();
+  unsigned numKGroups =
+      getWarpSize(*this) / (opIdx == 0 ? getMDim() : getNDim());
+  unsigned kDim = kWidth * numKGroups;
   if (opIdx == 0) {
     if (rank == 2)
-      return {parentShapePerCTATile[rank - 2], 32};
+      return {parentShapePerCTATile[rank - 2], kDim};
     else
-      return {parentShapePerCTATile[0], parentShapePerCTATile[rank - 2], 32};
+      return {parentShapePerCTATile[0], parentShapePerCTATile[rank - 2], kDim};
   } else if (opIdx == 1) {
     if (rank == 2)
-      return {32, parentShapePerCTATile[rank - 1]};
+      return {kDim, parentShapePerCTATile[rank - 1]};
     else
-      return {parentShapePerCTATile[0], 32, parentShapePerCTATile[rank - 1]};
+      return {parentShapePerCTATile[0], kDim, parentShapePerCTATile[rank - 1]};
   } else {
     llvm::report_fatal_error("DotOperandEncodingAttr opIdx must be 0 or 1");
   }
@@ -1615,9 +1616,8 @@ AMDWmmaEncodingAttr::getSizePerThreadForOperands(unsigned opIdx) const {
   }
 }
 
-SmallVector<unsigned>
-AMDWmmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
-                                                      int opIdx) const {
+SmallVector<unsigned> AMDWmmaEncodingAttr::getShapePerCTATileForDotOperands(
+    ArrayRef<int64_t> shape, int kWidth, int opIdx) const {
   auto parentShapePerCTA = getShapePerCTATile(shape);
   if (opIdx == 0) {
     return {parentShapePerCTA[0], static_cast<unsigned>(shape[1])};
@@ -1925,9 +1925,8 @@ unsigned NvidiaMmaEncodingAttr::getTotalElemsPerThreadForOperands(
   }
   llvm_unreachable("unknown mma layout");
 }
-SmallVector<unsigned>
-NvidiaMmaEncodingAttr::getShapePerCTATileForDotOperands(ArrayRef<int64_t> shape,
-                                                        int opIdx) const {
+SmallVector<unsigned> NvidiaMmaEncodingAttr::getShapePerCTATileForDotOperands(
+    ArrayRef<int64_t> shape, int kWidth, int opIdx) const {
   assert(isAmpere() && "mmaLayout version = 1 is not implemented yet");
   auto parentShapePerCTATile = getShapePerCTATile(shape);
   auto rank = parentShapePerCTATile.size();
