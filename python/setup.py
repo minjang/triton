@@ -142,13 +142,16 @@ def get_json_package_info():
 # llvm
 def get_llvm_package_info():
     system = platform.system()
-    arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
+    try:
+        arch = {"x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}[platform.machine()]
+    except KeyError:
+        arch = platform.machine()
     if system == "Darwin":
         system_suffix = f"macos-{arch}"
     elif system == "Linux":
         if arch == 'arm64':
             system_suffix = 'ubuntu-arm64'
-        else:
+        elif arch == 'x64':
             # Ubuntu 22.04 has GLIBCXX support up to GLIBCXX_3.4.30.
             # Ubuntu 20.04 has GLIBCXX support up to GLIBCXX_3.4.28.
             # Almalinux 8 (and other RHEL8 derivatives) have GLIBCXX
@@ -174,7 +177,15 @@ def get_llvm_package_info():
                 vglibc = tuple(map(int, platform.libc_ver()[1].split('.')))
                 vglibc = vglibc[0] * 100 + vglibc[1]
                 system_suffix = 'almalinux-x64' if vglibc > 217 else 'centos-x64'
+        else:
+            print(
+                f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
+            )
+            return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     else:
+        print(
+            f"LLVM pre-compiled image is not available for {system}-{arch}. Proceeding with user-configured LLVM from source build."
+        )
         return Package("llvm", "LLVM-C.lib", "", "LLVM_INCLUDE_DIRS", "LLVM_LIBRARY_DIR", "LLVM_SYSPATH")
     # use_assert_enabled_llvm = check_env_flag("TRITON_USE_ASSERT_ENABLED_LLVM", "False")
     # release_suffix = "assert" if use_assert_enabled_llvm else "release"
@@ -245,7 +256,10 @@ def download_and_copy(name, src_path, variable, version, url_func):
         return
     base_dir = os.path.dirname(__file__)
     system = platform.system()
-    arch = {"x86_64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
+    try:
+        arch = {"x86_64": "64", "arm64": "aarch64", "aarch64": "aarch64"}[platform.machine()]
+    except KeyError:
+        arch = platform.machine()
     url = url_func(arch, version)
     tmp_path = os.path.join(triton_cache_path, "nvidia", name)  # path to cache the download
     dst_path = os.path.join(base_dir, os.pardir, "third_party", "nvidia", "backend", src_path)  # final binary path
