@@ -1253,6 +1253,12 @@ void init_triton_ir(py::module &&m) {
              return self.create<ExperimentalDescriptorLoadOp>(
                  type, desc_ptr, indices, cacheModifier, evictionPolicy);
            })
+      .def("create_descriptor_store",
+           [](TritonOpBuilder &self, Value &desc_ptr, Value value,
+              std::vector<Value> &indices) -> void {
+             self.create<ExperimentalDescriptorStoreOp>(desc_ptr, value,
+                                                        indices);
+           })
       .def("create_reshape",
            [](TritonOpBuilder &self, Value &arg, std::vector<int64_t> &shape,
               bool allowReorder) -> Value {
@@ -1618,11 +1624,19 @@ void init_triton_ir(py::module &&m) {
 }
 
 void init_triton_env_vars(py::module &m) {
-  m.def("get_cache_invalidating_env_vars", []() -> std::map<std::string, bool> {
-    std::map<std::string, bool> ret;
-    for (const auto &envVar : CACHE_INVALIDATING_ENV_VARS) {
-      ret[envVar] = triton::tools::getBoolEnv(envVar);
-    }
-    return ret;
-  });
+  m.def("get_cache_invalidating_env_vars",
+        []() -> std::map<std::string, std::string> {
+          std::map<std::string, std::string> ret;
+          for (const auto &envVar : CACHE_INVALIDATING_ENV_VARS) {
+            auto strVal = triton::tools::getStrEnv(envVar);
+            if (strVal.empty())
+              continue;
+            auto boolV = triton::tools::isEnvValueBool(strVal);
+            if (boolV.has_value())
+              ret[envVar] = boolV.value() ? "true" : "false";
+            else
+              ret[envVar] = strVal;
+          }
+          return ret;
+        });
 }
