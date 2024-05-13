@@ -95,13 +95,6 @@ public:
       return resultVals;
     }
 
-    // cannot utilize duplication with parent mfma layout
-    if (auto slice = encoding.dyn_cast<SliceEncodingAttr>()) {
-      if (slice.getParent().dyn_cast<AMDMfmaEncodingAttr>()) {
-        return resultVals;
-      }
-    }
-
     SmallVector<unsigned> elemsPerThread = getElemsPerThread(rtType);
     int rank = elemsPerThread.size();
     if (product<unsigned>(elemsPerThread) != resultVals.size())
@@ -110,7 +103,7 @@ public:
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;
-    SmallVector<unsigned> sizePerThread = getSizePerThread(encoding);
+    SmallVector<unsigned> sizePerThread = getContigPerThread(encoding);
     if (rank != sizePerThread.size())
       return resultVals;
 
