@@ -10,8 +10,10 @@
 using namespace mlir;
 using namespace mlir::triton;
 
+using mlir::triton::gpu::appendOrGetExternFuncOp;
 using mlir::triton::gpu::ElementwiseOpConversionBase;
 using mlir::triton::gpu::getElementType;
+using mlir::triton::gpu::getFunctionType;
 using mlir::triton::gpu::MultipleOperandsRange;
 
 typedef std::function<SmallVector<Value>(Location, ConversionPatternRewriter &,
@@ -1213,23 +1215,62 @@ struct ExpOpConversionApprox
                                    ConversionPatternRewriter &rewriter,
                                    Type elemTy, MultipleOperandsRange operands,
                                    Location loc) const {
-    // For non-FP32 input, call __nv_expf for higher-precision calculation
+    // For non-FP32 input, call __ocml_exp_f64 for higher-precision calculation
     if (elemTy.getIntOrFloatBitWidth() != 32)
       return {};
 
     const double log2e = 1.4426950408889634;
     Value prod = fmul(f32_ty, operands[0][0], f32_val(log2e));
 
-    return {rewriter.create<math::Exp2Op>(loc, f32_ty, prod,
-                                          adaptor.getAttributes().getValue())};
+    // Here we use __ocml_exp2_f32 instead of math::Exp2Op. The latter
+    // flushes denorms by default, but we want to preserve denorms by default
+    // for expOp.
+    StringRef funcName = "__ocml_exp2_f32";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    return {rewriter.create<LLVM::CallOp>(loc, funcOp, prod).getResult()};
   }
+};
+
+struct Exp2OpConversion
+    : ElementwiseOpConversionBase<mlir::math::Exp2Op, Exp2OpConversion> {
+  using ElementwiseOpConversionBase<
+      mlir::math::Exp2Op, Exp2OpConversion>::ElementwiseOpConversionBase;
+
+  explicit Exp2OpConversion(LLVMTypeConverter &typeConverter,
+                            ModuleAxisInfoAnalysis &axisInfoAnalysis, bool ftz,
+                            PatternBenefit benefit)
+      : ElementwiseOpConversionBase(typeConverter, axisInfoAnalysis, benefit),
+        ftz(ftz) {}
+
+  SmallVector<Value> createDestOps(mlir::math::Exp2Op op, OpAdaptor adaptor,
+                                   ConversionPatternRewriter &rewriter,
+                                   Type elemTy, MultipleOperandsRange operands,
+                                   Location loc) const {
+    // For non-FP32 input, call __ocml_exp2_f64 for higher-precision calculation
+    if (elemTy.getIntOrFloatBitWidth() != 32)
+      return {};
+
+    StringRef funcName = ftz ? "__ocml_native_exp2_f32" : "__ocml_exp2_f32";
+    Type funcType = getFunctionType(elemTy, operands[0]);
+    LLVM::LLVMFuncOp funcOp =
+        appendOrGetExternFuncOp(rewriter, op, funcName, funcType);
+
+    return {
+        rewriter.create<LLVM::CallOp>(loc, funcOp, operands[0]).getResult()};
+  }
+
+private:
+  bool ftz;
 };
 
 } // namespace
 
 namespace mlir::triton::AMD {
 void populateElementwiseOpToLLVMPatterns(
-    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, int numWarps,
+    LLVMTypeConverter &typeConverter, RewritePatternSet &patterns, bool ftz,
     ModuleAxisInfoAnalysis &axisInfoAnalysis, ModuleAllocation &allocation,
     const TargetInfo &targetInfo, PatternBenefit benefit) {
 
@@ -1257,11 +1298,23 @@ void populateElementwiseOpToLLVMPatterns(
   patterns.add<FpToFpOpConversion>(typeConverter, axisInfoAnalysis,
                                    targetInfo.getISAFamily(), benefit);
 
-  // ExpOpConversionApprox will try using ex2.approx if the input type is
+  // ExpOpConversionApprox will try using __ocml_exp2_f32 if the input type is
   // FP32. For other input types, ExpOpConversionApprox will return failure and
   // ElementwiseOpConversion<math::ExpOp, math::ExpOp> defined below will call
-  // __nv_expf for higher-precision calculation
+  // __ocml_exp_f64 for higher-precision calculation
   patterns.add<ExpOpConversionApprox>(typeConverter, axisInfoAnalysis, benefit);
+  // Exp2OpConversion will use __ocml_exp2_f32 or __ocml_native_exp2_f32
+  // based on the __HIP_FTZ flag if the input type if FP32. For FP64 input,
+  // Exp2OpConversion will return failure and later pass will call
+  // __ocml_exp2_f64 for higher-precision calculation
+  // The denorm flushing behavior is as follows:
+  // 1. If __HIP_FTZ = 1, exp2 flushes denorms in input and output regardless
+  //    of the value of kernel arg `allow_flush_denorm`.
+  // 2. If __HIP_FTZ = 0, whether exp2 flushes denorms in input and output
+  //    depends on the value of kernel arg `allow_flush_denorm`.
+  // 3. __HIP_FTZ is default to 1 and not exposed as a kernel argument.
+  //    For now it is used as a controller for developers only.
+  patterns.add<Exp2OpConversion>(typeConverter, axisInfoAnalysis, ftz, benefit);
   mlir::triton::populateElementwiseOpToLLVMPatterns(
       typeConverter, patterns, axisInfoAnalysis, targetInfo, benefit);
   mlir::triton::populateMinMaxFOpToLLVMPattern(
