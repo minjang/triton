@@ -30,12 +30,16 @@ SmallVector<unsigned> getRepShapeForCvtLayout(triton::gpu::ConvertLayoutOp op);
 /// values: [Start, End).
 template <typename T> class Interval {
 public:
-  Interval() {}
-  Interval(T S, T E) : Start(S), End(E) { assert(Start <= End); }
+  Interval() = default;
+  Interval(T S) : Start(S), End(S + 1) {}
+  Interval(T S, T E) : Start(S), End(E) { assert(Start < End); }
   T start() const { return Start; }
   T end() const { return End; }
   T size() const { return End - Start; }
   bool contains(T Addr) const { return Start <= Addr && Addr < End; }
+  bool contains(const Interval &R) const {
+    return Start <= R.Start && R.End <= End;
+  }
   bool intersects(const Interval &R) const {
     return Start < R.End && R.Start < End;
   }
@@ -45,6 +49,12 @@ public:
   bool operator!=(const Interval &R) const { return !(*this == R); }
   bool operator<(const Interval &R) const {
     return std::make_pair(Start, End) < std::make_pair(R.Start, R.End);
+  }
+  bool adjacent(const Interval &R) const {
+    return R.End == Start || R.Start == End;
+  }
+  Interval span(const Interval &R) const {
+    return Interval(std::min(Start, R.Start), std::max(End, R.End));
   }
 
 private:
@@ -132,6 +142,11 @@ public:
     return bufferSet.at(bufferId).kind == BufferT::BufferKind::Virtual;
   }
 
+  /// Returns if the given buffer is a alias buffer.
+  bool isAliasBuffer(BufferId bufferId) const {
+    return bufferSet.at(bufferId).kind == BufferT::BufferKind::Alias;
+  }
+
   /// Returns the size of total shared memory allocated
   size_t getSharedMemorySize() const { return sharedMemorySize; }
 
@@ -141,7 +156,7 @@ private:
     /// Explicit: triton_gpu.local_alloc
     /// Scratch: triton_gpu.convert_layout
     /// Virtual: triton.call
-    enum class BufferKind { Explicit, Scratch, Virtual };
+    enum class BufferKind { Explicit, Scratch, Virtual, Alias };
 
     /// MT: thread-safe
     inline static std::atomic<BufferId> nextId = 0;
@@ -151,6 +166,7 @@ private:
     size_t size;
     size_t alignment;
     size_t offset;
+    SmallVector<BufferT *> aliases;
 
     bool operator==(const BufferT &other) const { return id == other.id; }
     bool operator<(const BufferT &other) const { return id < other.id; }
@@ -160,6 +176,16 @@ private:
             size_t offset = 0)
         : kind(kind), id(nextId++), size(size), alignment(alignment),
           offset(offset) {}
+
+    void applyToBufferAndAliases(const std::function<void(BufferT *)> &f) {
+      if (kind == BufferKind::Alias) {
+        for (auto *buf : aliases)
+          f(buf);
+      } else
+        f(this);
+    }
+
+    void dump() const;
   };
 
   /// Op -> Scratch Buffer
@@ -171,18 +197,24 @@ private:
   /// BufferId -> Buffer
   using BufferSetT = std::map<BufferId, BufferT>;
 
+public:
+  void dump() const;
+
 private:
   template <BufferT::BufferKind Kind, typename KeyType, typename... Args>
-  void addBuffer(KeyType &key, Args &&...args) {
+  BufferT *addBuffer(KeyType &key, Args &&...args) {
     auto buffer = BufferT(Kind, std::forward<Args>(args)...);
     bufferSet[buffer.id] = std::move(buffer);
-    if constexpr (Kind == BufferT::BufferKind::Explicit) {
-      valueBuffer[key] = &bufferSet[buffer.id];
+    auto *bufP = &bufferSet[buffer.id];
+    if constexpr (Kind == BufferT::BufferKind::Explicit ||
+                  Kind == BufferT::BufferKind::Alias) {
+      valueBuffer[key] = bufP;
     } else if constexpr (Kind == BufferT::BufferKind::Virtual) {
-      opVirtual[key] = &bufferSet[buffer.id];
+      opVirtual[key] = bufP;
     } else {
-      opScratch[key] = &bufferSet[buffer.id];
+      opScratch[key] = bufP;
     }
+    return bufP;
   }
 
   void addAlias(Value value, Value alloc) {
