@@ -286,9 +286,10 @@ LinearLayout combineCtaAndCgaAndEnsureExpectedShape(LinearLayout ctaLayout,
 
   SmallVector<StringAttr> outDimNames = standardOutDimNames(ctx, rank);
 
-  auto shapeZip = llvm::zip(outDimNames, shape);
-  llvm::SmallDenseMap<StringAttr, int64_t> labeledShape(shapeZip.begin(),
-                                                        shapeZip.end());
+  llvm::SmallDenseMap<StringAttr, int64_t> labeledShape;
+  for (auto [dim, size] : llvm::zip(outDimNames, shape)) {
+    labeledShape[dim] = size;
+  }
 
   LinearLayout cgaLayout =
       ensureLayoutNotLargerThan(makeCgaLayout(cgaLayoutAttr), labeledShape)
