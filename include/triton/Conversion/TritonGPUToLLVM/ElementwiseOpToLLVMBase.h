@@ -103,7 +103,7 @@ public:
     if (!axisInfo)
       // axis info (e.g., constancy) not available
       return resultVals;
-    SmallVector<unsigned> sizePerThread = getSizePerThread(encoding);
+    SmallVector<unsigned> sizePerThread = getContigPerThread(encoding);
     if (rank != sizePerThread.size())
       return resultVals;
 
