@@ -49,4 +49,26 @@ module attributes {"triton_gpu.num-ctas" = 1 : i32, "triton_gpu.num-warps" = 4 :
     tt.store %2, %4 : tensor<32x32x!tt.ptr<f16>, #blocked>
     tt.return
   }
+  tt.func public @fma_dot_i8_i16(
+   // CHECK: %[[DOT2_ARG_A:.+]]: tensor<128x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #[[DOT_OP_PARENT]]}>>
+   %0: tensor<128x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>>,
+   // CHECK-SAME: %[[DOT2_ARG_B:.+]]: tensor<64x32xi8, #triton_gpu.dot_op<{opIdx = 1, parent = #[[DOT_OP_PARENT]]}>>
+   %1: tensor<64x32xi8, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>>,
+   %2: tensor<128x32x!tt.ptr<i16>, #blocked>) {
+    // CHECK: %[[DOT2_ARG_C:.+]] = arith.constant dense<0> : tensor<128x32xi16, #[[DOT_OP_PARENT]]>
+    %3 = arith.constant dense<0> : tensor<128x32xi16, #blocked>
+    // CHECK: %[[DOT2_OP_A:.+]] = arith.sitofp %[[DOT2_ARG_A]]
+    // CHECK-SAME: to tensor<128x64xf32, #triton_gpu.dot_op<{opIdx = 0, parent = #[[DOT_OP_PARENT]]
+    // CHECK: %[[DOT2_OP_B:.+]] = arith.sitofp %[[DOT2_ARG_B]]
+    // CHECK-SAME: to tensor<64x32xf32, #triton_gpu.dot_op<{opIdx = 1, parent = #[[DOT_OP_PARENT]]
+    // CHECK: %[[DOT2_OP_C:.+]] = arith.sitofp %[[DOT2_ARG_C]]
+    // CHECK-SAME: to tensor<128x32xf32, #[[DOT_OP_PARENT]]
+    // CHECK: %[[DOT2_FMA_RES:.+]] = tt.dot %[[DOT2_OP_A]], %[[DOT2_OP_B]], %[[DOT2_OP_C]]
+    // CHECK-SAME: -> tensor<128x32xf32, #[[DOT_OP_PARENT]]>
+    %4 = tt.dot %0, %1, %3 : tensor<128x64xi8, #triton_gpu.dot_op<{opIdx = 0, parent = #blocked}>> * tensor<64x32xi8, #triton_gpu.dot_op<{opIdx = 1, parent = #blocked}>> -> tensor<128x32xi16, #blocked>
+    // CHECK: arith.fptosi %[[DOT2_FMA_RES]]
+    // CHECK-SAME: to tensor<128x32xi16, #[[DOT_OP_PARENT]]>
+    tt.store %2, %4 : tensor<128x32x!tt.ptr<i16>, #blocked>
+    tt.return
+  }
 }
